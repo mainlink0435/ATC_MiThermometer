@@ -21,11 +21,17 @@
  */
 
 // ---- state ----
-static volatile u8  g_state = GARAGE_STATE_CLOSED;
-static volatile u8  g_active = 0;
-static volatile u8  g_period_x100ms = GARAGE_DEFAULT_PERIOD_X100MS;
-static u32 g_frame = 0;
-static u32 g_last_tick = 0;
+// "RAM" = retention section: survives deep sleep. Without it these would be
+// reset to zero on every wake, losing garage mode and the animation frame.
+RAM static volatile u8  g_state = GARAGE_STATE_CLOSED;
+RAM static volatile u8  g_active = 0;
+RAM static volatile u8  g_period_x100ms = GARAGE_DEFAULT_PERIOD_X100MS;
+RAM static u32 g_frame = 0;
+RAM static u32 g_last_tick = 0;
+
+// Arrow glyphs for the bottom (small) digits.
+#define GLYPH_UP_ARROW   0x33  // "▲" (a,f,b,g)
+#define GLYPH_DOWN_ARROW 0xC6  // "▼" (d,e,c,g)
 
 // ---- glyph lookup (7-seg) ----
 static u8 glyph(char c) {
@@ -61,24 +67,26 @@ static u8 glyph(char c) {
 }
 
 // ---- helpers ----
-// Write the 5 digit slots with the segment byte for each of 5 chars.
-static void set_text(u8 g0, u8 g1, u8 g2, u8 g3, u8 g4) {
-	display_buff[5] = g0;
-	display_buff[4] = g1;
-	display_buff[3] = g2;
-	display_buff[1] = g3;
-	display_buff[0] = g4;
+// Write the 3 top (big) digit slots and the 2 bottom (small) digit slots.
+static void set_top(u8 g5, u8 g4, u8 g3) {
+	display_buff[5] = g5;
+	display_buff[4] = g4;
+	display_buff[3] = g3;
+}
+static void set_bottom(u8 g1, u8 g0) {
+	display_buff[1] = g1;
+	display_buff[0] = g0;
 }
 
-// Draw a 5-char window of `tape` (length `len`) starting at `start`.
-// Out-of-range positions are shown blank.
-static void draw_tape(const char *tape, int len, int start) {
-	u8 w[5];
-	for(int i = 0; i < 5; i++) {
+// Scroll a 3-char window of `tape` (length `len`) through the top row,
+// starting at `start`. Out-of-range positions are shown blank.
+static void scroll_top(const char *tape, int len, int start) {
+	u8 w[3];
+	for(int i = 0; i < 3; i++) {
 		int idx = start + i;
 		w[i] = (idx >= 0 && idx < len) ? glyph(tape[idx]) : 0x00;
 	}
-	set_text(w[0], w[1], w[2], w[3], w[4]);
+	set_top(w[0], w[1], w[2]);
 }
 
 // Set smiley + BLE symbol bits in byte 2 (temp symbol left off).
@@ -87,61 +95,61 @@ static void set_symbols(u8 smiley, bool ble) {
 }
 
 // ---- renderers ----
-// Idle marquee: the word scrolls leftwards through the 5 slots, looped.
-static void render_idle(const char *word, int n, u8 smiley, bool ble) {
+// Idle state: the word scrolls leftwards through the top (big) row so it
+// stays on one line and reads clearly. The bottom (small) row shows a fixed
+// 2-char label (e.g. "UP" / "dn").
+static void render_idle(const char *word, int n, u8 smiley, bool ble, u8 bg1, u8 bg0) {
 	char tape[16];
-	tape[0] = tape[1] = ' ';
-	for(int i = 0; i < n; i++) tape[2 + i] = word[i];
-	tape[2 + n] = ' ';
-	tape[2 + n + 1] = ' ';
-	int len = n + 4;
+	tape[0] = ' ';
+	for(int i = 0; i < n; i++) tape[1 + i] = word[i];
+	tape[1 + n] = ' ';
+	int len = n + 2;
 	int start = (int)(g_frame % (u32)(n + 1));
-	draw_tape(tape, len, start);
+	scroll_top(tape, len, start);
+	set_bottom(bg1, bg0);
 	set_symbols(smiley, ble);
 }
 
 // Transition animation (opening/closing), loops until a new command.
-// Phase A: countdown 9..1 on a big digit with direction arrows.
-// Phase B: segment sweep across all digits (rising / descending).
-// Phase C: scrolling word marquee.
+// Phase A: countdown 9..1 on the top row + blinking direction arrows.
+// Phase B: segment sweep across the top row (rising / descending).
+// Phase C: scrolling word marquee through the top row.
 static void render_transition(bool opening, bool ble) {
-	const char *word = opening ? "OPENING" : "CLOSING";
-	int wlen = 7;
-	u8 arr = opening ? 0x77 /*A*/ : 0xa7 /*y*/; // direction glyph
+	const char *word = opening ? "OPEN" : "CLOSED";
+	int wlen = opening ? 4 : 6;
+	u8 arr = opening ? GLYPH_UP_ARROW : GLYPH_DOWN_ARROW;
 	u32 f = g_frame & 0xff;
 
-	if (f < 9) { // countdown
+	if (f < 9) { // countdown 9..1
 		u8 n = (u8)(9 - f); // 9..1
-		display_buff[5] = 0x00;
-		display_buff[4] = 0x00;
-		display_buff[3] = glyph('0' + n);
-		display_buff[1] = arr;
-		display_buff[0] = arr;
+		set_top(0x00, 0x00, glyph('0' + n));
+		u8 on = (f & 1) ? arr : 0x00; // blink arrows
+		set_bottom(on, on);
 		set_symbols(0, ble);
 		return;
 	}
 	f -= 9;
-	if (f < 4) { // sweep: bar across all digits, bottom->top (open) / top->bottom (close)
+	if (f < 4) { // sweep on the top row
 		u8 seg;
 		if(opening)
-			seg = (f == 0) ? 0x80 : (f == 1) ? 0x02 : 0x10; // d, g, a
+			seg = (f == 0) ? 0x80 : (f == 1) ? 0x02 : 0x10; // d, g, a (rising)
 		else
-			seg = (f == 0) ? 0x10 : (f == 1) ? 0x02 : 0x80; // a, g, d
-		display_buff[5] = display_buff[4] = display_buff[3] = seg;
-		display_buff[1] = display_buff[0] = arr;
+			seg = (f == 0) ? 0x10 : (f == 1) ? 0x02 : 0x80; // a, g, d (descending)
+		set_top(seg, seg, seg);
+		set_bottom(arr, arr);
 		set_symbols(0, ble);
 		return;
 	}
 	f -= 4;
-	{ // marquee
+	{ // marquee "OPEN"/"CLOSED" through the top row
 		char tape[14];
-		tape[0] = tape[1] = ' ';
-		for(int i = 0; i < wlen; i++) tape[2 + i] = word[i];
-		tape[2 + wlen] = ' ';
-		tape[2 + wlen + 1] = ' ';
-		int len = wlen + 4;
+		tape[0] = ' ';
+		for(int i = 0; i < wlen; i++) tape[1 + i] = word[i];
+		tape[1 + wlen] = ' ';
+		int len = wlen + 2;
 		int start = (int)(f % (u32)(wlen + 1));
-		draw_tape(tape, len, start);
+		scroll_top(tape, len, start);
+		set_bottom(arr, arr);
 		set_symbols(0, ble);
 	}
 }
@@ -182,8 +190,8 @@ void garage_render(void) {
 	if (!g_active) return;
 	bool ble = wrk.ble_connected != 0;
 	switch(g_state) {
-	case GARAGE_STATE_OPEN:     render_idle("OPEN",   4, 5 /*(^-^)*/, ble); break;
-	case GARAGE_STATE_CLOSED:   render_idle("CLOSED", 6, 6 /*(-^-)*/, ble); break;
+	case GARAGE_STATE_OPEN:     render_idle("OPEN",   4, 5 /*(^-^)*/, ble, glyph('U'), glyph('P')); break;
+	case GARAGE_STATE_CLOSED:   render_idle("CLOSED", 6, 6 /*(-^-)*/, ble, glyph('d'), glyph('n')); break;
 	case GARAGE_STATE_OPENING:  render_transition(1, ble); break;
 	case GARAGE_STATE_CLOSING:  render_transition(0, ble); break;
 	default: break;
