@@ -13,6 +13,10 @@ import subprocess
 import os
 import io
 
+# Emit LF-only output (avoid CR that breaks bash backtick substitution on Windows)
+if hasattr(sys.stdout, 'reconfigure'):
+	sys.stdout.reconfigure(newline='\n')
+
 __progname__ = "TLSR825x Check RetentionMem Address"
 __filename__ = "TlsrRetMemAddr"
 __version__ = "20.11.20"

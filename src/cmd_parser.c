@@ -24,6 +24,7 @@
 #include "mi_beacon.h"
 #endif
 #include "cmd_parser.h"
+#include "garage_door.h"
 #if (DEV_SERVICES & SERVICE_OTA_EXT)
 #include "ext_ota.h"
 #endif
@@ -524,6 +525,14 @@ void cmd_parser(void * p) {
 				 lcd_flg.all_flg = req->dat[1];
 			 send_buf[1] = lcd_flg.all_flg;
  			 olen = 2;
+		} else if (cmd == CMD_ID_GARAGE) { // Garage door display state (0..3, 0xFF = off)
+			if (len) {
+				if (len > 1 && req->dat[2])
+					garage_set_period(req->dat[2]); // optional frame period x0.1s
+				garage_set_state(req->dat[1]);
+			}
+			send_buf[1] = garage_get_state();
+			olen = 2;
 #endif // DEV_SERVICES & SERVICE_SCREEN
 #if (DEV_SERVICES & SERVICE_PINCODE)
 		} else if (cmd == CMD_ID_PINCODE && len > 3) { // Set new pinCode 0..999999

@@ -1,0 +1,33 @@
+name: Build ATC garage firmware
+
+# Builds the custom ATC_MiThermometer firmware with the garage-door display
+# feature for the Xiaomi LYWSD03MMC and uploads the .bin as an artifact.
+#
+# The .bin can be flashed OTA via https://pvvx.github.io/ATC_MiThermometer/TelinkMiFlasher.html
+# (or with your usual flash tool). Select the file under "Upload Firmware".
+
+on:
+  push:
+    branches: ["main", "garage-door-display"]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make wget bzip2 python3
+
+      - name: Build firmware (LYWSD03MMC, garage-door display)
+        run: |
+          make PROJECT_NAME=ATC_garage POJECT_DEF="-DDEVICE_TYPE=DEVICE_LYWSD03MMC"
+
+      - name: Upload firmware binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ATC_garage_firmware
+          path: ATC_garage.bin

@@ -3,6 +3,7 @@
 #include "stack/ble/ble.h"
 #include "vendor/common/blt_common.h"
 #include "cmd_parser.h"
+#include "garage_door.h"
 #include "flash_eep.h"
 #include "battery.h"
 #include "ble.h"
@@ -1288,20 +1289,26 @@ void main_loop(void) {
 						lcd_flg.update = 1;
 				}
 #elif !((DEVICE_TYPE == DEVICE_MJWSD05MMC) || (DEVICE_TYPE == DEVICE_MJWSD05MMC_EN))
-				if (new - lcd_flg.tim_last_chow >= lcd_flg.min_step_time_update_lcd) {
-					lcd_flg.tim_last_chow = new;
-					lcd_flg.show_stage++;
-					if(lcd_flg.update_next_measure) {
-						lcd_flg.update = wrk.msc.b.update_lcd;
-						wrk.msc.b.update_lcd = 0;
-					} else
-						lcd_flg.update = 1;
-				}
+				if (!garage_is_active()) {
+					if (new - lcd_flg.tim_last_chow >= lcd_flg.min_step_time_update_lcd) {
+						lcd_flg.tim_last_chow = new;
+						lcd_flg.show_stage++;
+						if(lcd_flg.update_next_measure) {
+							lcd_flg.update = wrk.msc.b.update_lcd;
+							wrk.msc.b.update_lcd = 0;
+						} else
+							lcd_flg.update = 1;
+					}
+				} else
+					garage_task(new);
 #endif
 				if (lcd_flg.update) {
 					lcd_flg.update = 0;
 					if (!lcd_flg.b.ext_data_buf) { // LCD show external data ? No
-						lcd();
+						if (garage_is_active())
+							garage_render();
+						else
+							lcd();
 					}
 					update_lcd();
 				}

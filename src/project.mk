@@ -41,6 +41,7 @@ $(OUT_PATH)/src/rh2.o \
 $(OUT_PATH)/src/ble.o \
 $(OUT_PATH)/src/i2c.o \
 $(OUT_PATH)/src/cmd_parser.o \
+$(OUT_PATH)/src/garage_door.o \
 $(OUT_PATH)/src/ext_ota.o \
 $(OUT_PATH)/src/flash_eep.o \
 $(OUT_PATH)/src/logger.o \

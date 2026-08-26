@@ -1,0 +1,57 @@
+# ESPHome configuration for driving the garage-door display on an
+# ATC_MiThermometer (Xiaomi LYWSD03MMC) running the modified firmware.
+#
+# Requires an ESP32 that can see the thermometer over BLE. It connects to the
+# thermometer and writes the garage-door state to the RxTx characteristic when
+# a template `number` entity changes.
+#
+# State mapping (0-3):
+#   0 = closed    1 = open    2 = opening    3 = closing
+#
+# In Home Assistant, create an automation that sets the `garage_state` number
+# from your garage door sensors, e.g.:
+#
+#   alias: "Send garage door state to thermometer"
+#   trigger:
+#     - platform: state
+#       entity_id: cover.garage_door
+#   action:
+#     - service: number.set_value
+#       target:
+#         entity_id: number.garage_door_state
+#       data:
+#         value: >
+#           {% if trigger.to_state.state == 'closed' %}0
+#           {% elif trigger.to_state.state == 'open' %}1
+#           {% elif trigger.to_state.state == 'opening' %}2
+#           {% else %}3{% endif %}
+
+esphome:
+  name: garage-door-display
+  platform: ESP32
+  board: esp32dev
+
+# Enable the BLE tracker (needed by the ble_client below).
+esp32_ble_tracker:
+
+# The custom component (this repo). Point at your local clone, or fork.
+external_components:
+  - source:
+      type: local
+      path: esphome/components
+
+garage_writer:
+  id: garage
+  mac_address: "A4:C1:38:XX:XX:XX"   # <-- the LYWSD03MMC MAC address
+
+# Expose a 0-3 number that HA automations drive.
+number:
+  - platform: template
+    id: garage_state
+    name: "Garage Door State"
+    min_value: 0
+    max_value: 3
+    step: 1
+    restore_value: false
+    on_value:
+      - lambda: "id(garage)->set_state((uint8_t)x);"
