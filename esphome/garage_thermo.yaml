@@ -40,12 +40,14 @@ esphome:
 esp32_ble_tracker:
 
 # The custom component from this repo's fork. ESPHome auto-detects the
-# `esphome/components` folder in the repo, so no `path` is needed for a git source.
+# `esphome/components` folder in the repo, so no `path` is needed for a git
+# source. `refresh: always` avoids serving a stale cached clone on recompiles.
 external_components:
   - source:
       type: git
       url: https://github.com/mainlink0435/ATC_MiThermometer
       ref: garage-door-display
+      refresh: always
     components: [garage_writer]
 
 garage_writer:
