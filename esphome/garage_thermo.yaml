@@ -1,12 +1,14 @@
 # ESPHome configuration for driving the garage-door display on an
 # ATC_MiThermometer (Xiaomi LYWSD03MMC) running the modified firmware.
 #
-# Requires an ESP32 that can see the thermometer over BLE. It connects to the
-# thermometer and writes the garage-door state to the RxTx characteristic when
-# a template `number` entity changes.
+# This is an ACTIVE BLE client (not a passive proxy). It connects to the
+# thermometer only when a command is requested, writes the state to the RxTx
+# characteristic (0x1F1F), then disconnects so the thermometer can sleep.
+# It runs fine on the same ESP32 as your bluetooth_proxy.
 #
-# State mapping (0-3):
-#   0 = closed    1 = open    2 = opening    3 = closing
+# State mapping (0-4):
+#   0 = closed    1 = open    2 = opening    3 = closing    4 = error
+# A separate button sends 0xFF = back to normal temp/hum display.
 #
 # In Home Assistant, create an automation that sets the `garage_state` number
 # from your garage door sensors, e.g.:
@@ -24,34 +26,47 @@
 #           {% if trigger.to_state.state == 'closed' %}0
 #           {% elif trigger.to_state.state == 'open' %}1
 #           {% elif trigger.to_state.state == 'opening' %}2
-#           {% else %}3{% endif %}
+#           {% elif trigger.to_state.state == 'closing' %}3
+#           {% else %}4{% endif %}
+#
+# (For a contact sensor use binary_sensor.garage_door_contact: on=1, off=0.)
 
 esphome:
   name: garage-door-display
   platform: ESP32
   board: esp32dev
 
-# Enable the BLE tracker (needed by the ble_client below).
+# Enable the BLE tracker (already present if this ESP32 is also your proxy).
 esp32_ble_tracker:
 
-# The custom component (this repo). Point at your local clone, or fork.
+# The custom component from this repo's fork.
 external_components:
   - source:
-      type: local
-      path: esphome/components
+      type: git
+      url: https://github.com/mainlink0435/ATC_MiThermometer
+      ref: garage-door-display
+    path: esphome/components
 
 garage_writer:
   id: garage
-  mac_address: "A4:C1:38:XX:XX:XX"   # <-- the LYWSD03MMC MAC address
+  mac_address: "A4:C1:38:AD:E5:DC"   # the LYWSD03MMC MAC
+  auto_connect: false
 
-# Expose a 0-3 number that HA automations drive.
+# Expose a 0-4 number that HA automations drive.
 number:
   - platform: template
     id: garage_state
     name: "Garage Door State"
     min_value: 0
-    max_value: 3
+    max_value: 4
     step: 1
     restore_value: false
     on_value:
       - lambda: "id(garage)->set_state((uint8_t)x);"
+
+# A button to return the thermometer to its normal temp/hum display.
+button:
+  - platform: template
+    name: "Thermometer Normal Display"
+    on_press:
+      - lambda: "id(garage)->set_state(0xFF);"

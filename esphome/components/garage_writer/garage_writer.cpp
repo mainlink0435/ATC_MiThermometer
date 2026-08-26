@@ -14,30 +14,66 @@ static const uint16_t SERVICE_UUID = 0x1F10;
 static const uint16_t CHAR_UUID = 0x1F1F;
 static const uint8_t CMD_GARAGE = 0x4A;
 
+// Delay (ms) after writing before disconnecting, to ensure the write is
+// transmitted given the thermometer's connection-latency setting.
+static const uint32_t DISCONNECT_DELAY_MS = 3000;
+
+void GarageWriter::setup() {
+  BLEClientBase::setup();
+  // We manage connections ourselves: only connect when a command is pending,
+  // and disconnect afterwards so the thermometer can sleep.
+  this->set_auto_connect(false);
+}
+
 void GarageWriter::set_state(uint8_t state) {
-  if (!this->connected()) {
-    ESP_LOGW(TAG, "Not connected, cannot write garage state %u", state);
-    return;
+  this->pending_state_ = state;
+  this->pending_write_ = true;
+  if (this->connected()) {
+    this->write_pending_();
+  } else {
+    // Allow the tracker to connect on the next scan hit.
+    this->set_auto_connect(true);
   }
+}
+
+void GarageWriter::set_state(esp32_ble_tracker::ClientState st) {
+  BLEClientBase::set_state(st);
+  if (st == esp32_ble_tracker::ClientState::ESTABLISHED && this->pending_write_) {
+    this->write_pending_();
+  }
+}
+
+void GarageWriter::write_pending_() {
+  this->pending_write_ = false;
   if (this->rx_char_ == nullptr) {
     this->rx_char_ = this->get_characteristic(SERVICE_UUID, CHAR_UUID);
   }
   if (this->rx_char_ == nullptr) {
     ESP_LOGW(TAG, "Characteristic 0x%04X not found on device", CHAR_UUID);
+    this->set_auto_connect(false);
+    this->unconditional_disconnect();
     return;
   }
-  uint8_t data[2] = {CMD_GARAGE, state};
+  uint8_t data[2] = {CMD_GARAGE, this->pending_state_};
   esp_err_t err = this->rx_char_->write_value(data, 2, ESP_GATT_WRITE_TYPE_NO_RSP);
   if (err == ESP_OK) {
-    ESP_LOGD(TAG, "Sent garage state %u", state);
+    ESP_LOGD(TAG, "Sent garage state %u", this->pending_state_);
   } else {
     ESP_LOGW(TAG, "Write failed, err=%d", err);
   }
+  // Stop auto-reconnect and drop the link shortly after the write so the
+  // thermometer can go back to sleep.
+  this->set_auto_connect(false);
+  this->set_timeout(DISCONNECT_DELAY_MS, [this]() { this->unconditional_disconnect(); });
 }
 
 void GarageWriter::on_disconnect_complete(esp_err_t reason) {
   this->rx_char_ = nullptr;
   BLEClientBase::on_disconnect_complete(reason);
+  if (this->pending_write_) {
+    // A new command arrived while we were connected; reconnect to send it.
+    this->set_auto_connect(true);
+  }
 }
 
 }  // namespace garage_writer
