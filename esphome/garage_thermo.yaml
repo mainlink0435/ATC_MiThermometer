@@ -39,6 +39,10 @@ esphome:
 # Enable the BLE tracker (already present if this ESP32 is also your proxy).
 esp32_ble_tracker:
 
+# The BLE proxy uses 3 connection slots and the garage writer needs a 4th.
+esp32_ble:
+  max_connections: 4
+
 # The custom component from this repo's fork. ESPHome auto-detects the
 # `esphome/components` folder in the repo, so no `path` is needed for a git
 # source. `refresh: always` (a sibling of `source`) avoids a stale cached clone
