@@ -25,6 +25,15 @@ void GarageWriter::setup() {
   this->set_auto_connect(false);
 }
 
+void GarageWriter::loop() {
+  BLEClientBase::loop();
+  // ESPHome 2025.10.x sets the connected state directly (bypassing our
+  // set_state() hook), so poll connected() here and send any pending command.
+  if (this->connected() && this->pending_write_) {
+    this->write_pending_();
+  }
+}
+
 void GarageWriter::set_state(uint8_t state) {
   this->pending_state_ = state;
   this->pending_write_ = true;
@@ -40,9 +49,7 @@ void GarageWriter::set_state(uint8_t state) {
 
 void GarageWriter::set_state(esp32_ble_tracker::ClientState st) {
   BLEClientBase::set_state(st);
-  if (st == esp32_ble_tracker::ClientState::ESTABLISHED && this->pending_write_) {
-    this->write_pending_();
-  } else if (st == esp32_ble_tracker::ClientState::IDLE) {
+  if (st == esp32_ble_tracker::ClientState::IDLE) {
     // Connection fully torn down: drop the (now-freed) characteristic handle
     // and reconnect if a new command is queued.
     this->rx_char_ = nullptr;
@@ -53,6 +60,8 @@ void GarageWriter::set_state(esp32_ble_tracker::ClientState st) {
 }
 
 void GarageWriter::write_pending_() {
+  if (!this->pending_write_)
+    return;
   this->pending_write_ = false;
   if (this->rx_char_ == nullptr) {
     this->rx_char_ = this->get_characteristic(SERVICE_UUID, CHAR_UUID);

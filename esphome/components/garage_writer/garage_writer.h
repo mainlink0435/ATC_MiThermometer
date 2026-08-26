@@ -24,6 +24,7 @@ class GarageWriter : public esp32_ble_client::BLEClientBase {
   /// 0=closed 1=open 2=opening 3=closing 4=error, 0xFF = off (normal display)
   void set_state(uint8_t state);
   void setup() override;
+  void loop() override;
 
  protected:
   void set_state(esp32_ble_tracker::ClientState st) override;
