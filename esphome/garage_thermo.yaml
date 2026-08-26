@@ -39,13 +39,14 @@ esphome:
 # Enable the BLE tracker (already present if this ESP32 is also your proxy).
 esp32_ble_tracker:
 
-# The custom component from this repo's fork.
+# The custom component from this repo's fork. ESPHome auto-detects the
+# `esphome/components` folder in the repo, so no `path` is needed for a git source.
 external_components:
   - source:
       type: git
       url: https://github.com/mainlink0435/ATC_MiThermometer
       ref: garage-door-display
-    path: esphome/components
+    components: [garage_writer]
 
 garage_writer:
   id: garage
