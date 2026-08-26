@@ -14,9 +14,10 @@ static const uint16_t SERVICE_UUID = 0x1F10;
 static const uint16_t CHAR_UUID = 0x1F1F;
 static const uint8_t CMD_GARAGE = 0x4A;
 
-// Delay (ms) after writing before disconnecting, to ensure the write is
-// transmitted given the thermometer's connection-latency setting.
-static const uint32_t DISCONNECT_DELAY_MS = 3000;
+// Delay (ms) after writing before disconnecting. Generous to ensure the write
+// is transmitted: a BLE write only reaches the slave at its next listen
+// window, which can be ~2.5s if the thermometer's connection latency is high.
+static const uint32_t DISCONNECT_DELAY_MS = 8000;
 
 void GarageWriter::setup() {
   BLEClientBase::setup();
