@@ -27,7 +27,6 @@ class GarageWriter : public esp32_ble_client::BLEClientBase {
 
  protected:
   void set_state(esp32_ble_tracker::ClientState st) override;
-  void on_disconnect_complete(esp_err_t reason) override;
   void write_pending_();
 
   esp32_ble_client::BLECharacteristic *rx_char_{nullptr};

@@ -31,7 +31,9 @@ void GarageWriter::set_state(uint8_t state) {
   if (this->connected()) {
     this->write_pending_();
   } else {
-    // Allow the tracker to connect on the next scan hit.
+    // Drop any stale characteristic handle, then let the tracker connect on
+    // the next scan hit.
+    this->rx_char_ = nullptr;
     this->set_auto_connect(true);
   }
 }
@@ -40,6 +42,13 @@ void GarageWriter::set_state(esp32_ble_tracker::ClientState st) {
   BLEClientBase::set_state(st);
   if (st == esp32_ble_tracker::ClientState::ESTABLISHED && this->pending_write_) {
     this->write_pending_();
+  } else if (st == esp32_ble_tracker::ClientState::IDLE) {
+    // Connection fully torn down: drop the (now-freed) characteristic handle
+    // and reconnect if a new command is queued.
+    this->rx_char_ = nullptr;
+    if (this->pending_write_) {
+      this->set_auto_connect(true);
+    }
   }
 }
 
@@ -65,15 +74,6 @@ void GarageWriter::write_pending_() {
   // thermometer can go back to sleep.
   this->set_auto_connect(false);
   this->set_timeout(DISCONNECT_DELAY_MS, [this]() { this->unconditional_disconnect(); });
-}
-
-void GarageWriter::on_disconnect_complete(esp_err_t reason) {
-  this->rx_char_ = nullptr;
-  BLEClientBase::on_disconnect_complete(reason);
-  if (this->pending_write_) {
-    // A new command arrived while we were connected; reconnect to send it.
-    this->set_auto_connect(true);
-  }
 }
 
 }  // namespace garage_writer
