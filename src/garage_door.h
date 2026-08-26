@@ -9,14 +9,15 @@
  * (service 0x1F10, char 0x1F1F). The firmware then renders baked-in
  * animations on the LCD for the given state:
  *
- *   state 0   = closed
- *   state 1   = open
- *   state 2   = opening  (transition animation until told otherwise)
- *   state 3   = closing  (transition animation until told otherwise)
+ *   state 0   = closed   (marquee "CLOSED" once, then static "CLS"/"dn")
+ *   state 1   = open     (marquee "OPEn" once, then static "OPn"/"UP")
+ *   state 2   = opening  (continuous rising sweep + "UP", no counter)
+ *   state 3   = closing  (continuous descending sweep + "dn", no counter)
+ *   state 4   = error    ("Err" blinking forever)
  *   state 0xFF = exit garage mode, return to normal temp/hum display
  *
  * Optional 3rd byte: [CMD_ID_GARAGE][state][period] where period is the
- * animation frame period in 0.1s units (0 = default 4 -> 0.4s).
+ * animation frame period in 0.1s units (0 = default 5 -> 0.5s).
  */
 
 enum {
@@ -24,12 +25,13 @@ enum {
 	GARAGE_STATE_OPEN,
 	GARAGE_STATE_OPENING,
 	GARAGE_STATE_CLOSING,
+	GARAGE_STATE_ERROR,		// 4
 	GARAGE_STATE_OFF = 0xFF
 } GARAGE_STATES;
 
-#define GARAGE_DEFAULT_PERIOD_X100MS	4	// 0.4s
+#define GARAGE_DEFAULT_PERIOD_X100MS	5	// 0.5s
 
-// Set the garage door state (0..3) and activate the display mode.
+// Set the garage door state (0..4) and activate the display mode.
 // Pass GARAGE_STATE_OFF (0xFF) to deactivate and return to normal display.
 void garage_set_state(u8 state);
 // Optional: override the animation frame period in 0.1s units (0 = default).

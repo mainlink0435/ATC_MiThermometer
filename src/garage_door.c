@@ -28,10 +28,17 @@ RAM static volatile u8  g_active = 0;
 RAM static volatile u8  g_period_x100ms = GARAGE_DEFAULT_PERIOD_X100MS;
 RAM static u32 g_frame = 0;
 RAM static u32 g_last_tick = 0;
+RAM static u8  g_settled = 0;   // 1 = idle state settled to static text
+RAM static u8  g_saved_adv = 0; // advertising interval saved before fast mode
+RAM static u8  g_fast_adv = 0;  // 1 = fast advertising currently active
 
-// Arrow glyphs for the bottom (small) digits.
-#define GLYPH_UP_ARROW   0x33  // "▲" (a,f,b,g)
-#define GLYPH_DOWN_ARROW 0xC6  // "▼" (d,e,c,g)
+// Advertising interval used while garage mode is animating (8 * 62.5 = 0.5 s)
+// so the device wakes ~twice a second for smooth motion. Restored after the
+// animation settles (or on exit) to save battery.
+#define GARAGE_ADV_INTERVAL  8
+// Idle-state marquee word lengths (frames until settling to static text).
+#define GARAGE_CLOSED_WLEN   6
+#define GARAGE_OPEN_WLEN     4
 
 // ---- glyph lookup (7-seg) ----
 static u8 glyph(char c) {
@@ -54,12 +61,12 @@ static u8 glyph(char c) {
 	case 'E': case 'e': return 0xf2;
 	case 'F': case 'f': return 0x72;
 	case 'L': case 'l': return 0xe0;
-	case 'n': return 0x56;
+	case 'n': return 0x46; // lowercase n, no top bar
 	case 'i': return 0x02;
 	case 'P': case 'p': return 0x73;
 	case 'r': return 0x42;
 	case 't': return 0xe2;
-	case 'U': case 'u': return 0xe1;
+	case 'U': case 'u': return 0xe5; // proper U (b,c,d,e,f)
 	case 'V': case 'v': case 'y': return 0xa7; // "y"/down-arrow
 	case '^': return 0x63; // up chevron
 	default: return 0x00;
@@ -95,76 +102,64 @@ static void set_symbols(u8 smiley, bool ble) {
 }
 
 // ---- renderers ----
-// Idle state: the word scrolls leftwards through the top (big) row so it
-// stays on one line and reads clearly. The bottom (small) row shows a fixed
-// 2-char label (e.g. "UP" / "dn").
-static void render_idle(const char *word, int n, u8 smiley, bool ble, u8 bg1, u8 bg0) {
+// Entry-from-right marquee: the word scrolls leftwards through the top row
+// once (start 0..n+1), then the caller settles to static text.
+static void marquee_top(const char *word, int n, u32 frame) {
 	char tape[16];
-	tape[0] = ' ';
-	for(int i = 0; i < n; i++) tape[1 + i] = word[i];
-	tape[1 + n] = ' ';
-	int len = n + 2;
-	int start = (int)(g_frame % (u32)(n + 1));
+	tape[0] = tape[1] = ' ';
+	for(int i = 0; i < n; i++) tape[2 + i] = word[i];
+	tape[2 + n] = ' ';
+	tape[2 + n + 1] = ' ';
+	int len = n + 4;
+	int start = (int)(frame % (u32)(n + 2));
 	scroll_top(tape, len, start);
-	set_bottom(bg1, bg0);
-	set_symbols(smiley, ble);
 }
 
-// Transition animation (opening/closing), loops until a new command.
-// Phase A: countdown 9..1 on the top row + blinking direction arrows.
-// Phase B: segment sweep across the top row (rising / descending).
-// Phase C: scrolling word marquee through the top row.
-static void render_transition(bool opening, bool ble) {
-	const char *word = opening ? "OPEN" : "CLOSED";
-	int wlen = opening ? 4 : 6;
-	u8 arr = opening ? GLYPH_UP_ARROW : GLYPH_DOWN_ARROW;
-	u32 f = g_frame & 0xff;
+// Continuous rising/descending bar sweep on the top row.
+static void sweep_top(bool opening, u32 frame) {
+	u8 seg;
+	switch(frame % 3) {
+	case 0: seg = opening ? 0x80 : 0x10; break; // bottom / top
+	case 1: seg = 0x02; break;                   // middle
+	default: seg = opening ? 0x10 : 0x80; break; // top / bottom
+	}
+	set_top(seg, seg, seg);
+}
 
-	if (f < 9) { // countdown 9..1
-		u8 n = (u8)(9 - f); // 9..1
-		set_top(0x00, 0x00, glyph('0' + n));
-		u8 on = (f & 1) ? arr : 0x00; // blink arrows
-		set_bottom(on, on);
-		set_symbols(0, ble);
-		return;
-	}
-	f -= 9;
-	if (f < 4) { // sweep on the top row
-		u8 seg;
-		if(opening)
-			seg = (f == 0) ? 0x80 : (f == 1) ? 0x02 : 0x10; // d, g, a (rising)
-		else
-			seg = (f == 0) ? 0x10 : (f == 1) ? 0x02 : 0x80; // a, g, d (descending)
-		set_top(seg, seg, seg);
-		set_bottom(arr, arr);
-		set_symbols(0, ble);
-		return;
-	}
-	f -= 4;
-	{ // marquee "OPEN"/"CLOSED" through the top row
-		char tape[14];
-		tape[0] = ' ';
-		for(int i = 0; i < wlen; i++) tape[1 + i] = word[i];
-		tape[1 + wlen] = ' ';
-		int len = wlen + 2;
-		int start = (int)(f % (u32)(wlen + 1));
-		scroll_top(tape, len, start);
-		set_bottom(arr, arr);
-		set_symbols(0, ble);
-	}
+// ---- fast advertising helpers ----
+// While animating we advertise ~0.5s so the device wakes often enough for
+// smooth motion; restore the normal interval when settled or on exit.
+static void adv_fast_on(void) {
+	if (g_fast_adv) return;
+	g_saved_adv = cfg.advertising_interval;
+	cfg.advertising_interval = GARAGE_ADV_INTERVAL;
+	test_config();
+	ev_adv_timeout(0, 0, 0);
+	g_fast_adv = 1;
+}
+static void adv_fast_off(void) {
+	if (!g_fast_adv) return;
+	cfg.advertising_interval = g_saved_adv;
+	test_config();
+	ev_adv_timeout(0, 0, 0);
+	g_fast_adv = 0;
 }
 
 // ---- public API ----
 void garage_set_state(u8 state) {
 	if (state == GARAGE_STATE_OFF) {
+		adv_fast_off();
 		g_active = 0;
+		g_settled = 0;
 		g_frame = 0;
 		lcd_flg.update = 1;
-	} else {
-		g_state = state & 0x03;
+	} else if (state <= GARAGE_STATE_ERROR) {
+		g_state = state;
 		g_active = 1;
+		g_settled = 0;
 		g_frame = 0;
 		g_last_tick = clock_time();
+		adv_fast_on();
 		lcd_flg.update = 1;
 	}
 }
@@ -184,18 +179,57 @@ void garage_task(u32 now) {
 		g_frame++;
 		lcd_flg.update = 1;
 	}
+	// Idle states settle to static text after one marquee pass.
+	if (!g_settled && (g_state == GARAGE_STATE_CLOSED || g_state == GARAGE_STATE_OPEN)) {
+		u32 wlen = (g_state == GARAGE_STATE_CLOSED) ? GARAGE_CLOSED_WLEN : GARAGE_OPEN_WLEN;
+		if (g_frame >= wlen + 2) {
+			g_settled = 1;
+			adv_fast_off();
+			lcd_flg.update = 1;
+		}
+	}
 }
 
 void garage_render(void) {
 	if (!g_active) return;
 	bool ble = wrk.ble_connected != 0;
 	switch(g_state) {
-	case GARAGE_STATE_OPEN:     render_idle("OPEN",   4, 5 /*(^-^)*/, ble, glyph('U'), glyph('P')); break;
-	case GARAGE_STATE_CLOSED:   render_idle("CLOSED", 6, 6 /*(-^-)*/, ble, glyph('d'), glyph('n')); break;
-	case GARAGE_STATE_OPENING:  render_transition(1, ble); break;
-	case GARAGE_STATE_CLOSING:  render_transition(0, ble); break;
+	case GARAGE_STATE_CLOSED:
+		if (g_settled) {
+			set_top(glyph('C'), glyph('L'), glyph('S'));
+			set_bottom(glyph('d'), glyph('n'));
+		} else {
+			marquee_top("CLOSED", GARAGE_CLOSED_WLEN, g_frame);
+			set_bottom(glyph('d'), glyph('n'));
+		}
+		break;
+	case GARAGE_STATE_OPEN:
+		if (g_settled) {
+			set_top(glyph('O'), glyph('P'), glyph('n'));
+			set_bottom(glyph('U'), glyph('P'));
+		} else {
+			marquee_top("OPEn", GARAGE_OPEN_WLEN, g_frame);
+			set_bottom(glyph('U'), glyph('P'));
+		}
+		break;
+	case GARAGE_STATE_OPENING:
+		sweep_top(1, g_frame);
+		set_bottom(glyph('U'), glyph('P'));
+		break;
+	case GARAGE_STATE_CLOSING:
+		sweep_top(0, g_frame);
+		set_bottom(glyph('d'), glyph('n'));
+		break;
+	case GARAGE_STATE_ERROR: // "Err" blinking forever
+		if (g_frame & 1)
+			set_top(glyph('E'), glyph('r'), glyph('r'));
+		else
+			set_top(0, 0, 0);
+		set_bottom(0, 0);
+		break;
 	default: break;
 	}
+	set_symbols(0, ble); // smiley off, keep BLE symbol
 }
 
 #else // (DEV_SERVICES & SERVICE_SCREEN) && (DEVICE_TYPE == DEVICE_LYWSD03MMC)

@@ -41,7 +41,7 @@ enum {
 	CMD_ID_TRG      = 0x44, // Get/Set trg and Reed switch data config
 	CMD_ID_TRG_OUT  = 0x45, // Get/Set trg out, Send Reed switch and trg data
 	CMD_ID_HXC      = 0x49, // Get/Set HX71X config
-	CMD_ID_GARAGE   = 0x4A, // Get/Set garage door display state (0..3, 0xFF=off)
+	CMD_ID_GARAGE   = 0x4A, // Get/Set garage door display state (0..4, 0xFF=off)
 	CMD_ID_CFG      = 0x55,	// Get/Set device config
 	CMD_ID_CFG_DEF  = 0x56,	// Set default device config
 	CMD_ID_LCD_DUMP = 0x60, // Get/Set lcd buf
