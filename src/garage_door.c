@@ -29,13 +29,16 @@ RAM static volatile u8  g_period_x100ms = GARAGE_DEFAULT_PERIOD_X100MS;
 RAM static u32 g_frame = 0;
 RAM static u32 g_last_tick = 0;
 RAM static u8  g_settled = 0;   // 1 = idle state settled to static text
-RAM static u8  g_saved_adv = 0; // advertising interval saved before fast mode
-RAM static u8  g_fast_adv = 0;  // 1 = fast advertising currently active
+RAM static u8  g_saved_adv = 0; // advertising interval saved when garage mode started
+RAM static u8  g_adv_mode = 0;  // 0 = saved (normal), 1 = fast (animating), 2 = settled (1s)
 
-// Advertising interval used while garage mode is animating (8 * 62.5 = 0.5 s)
-// so the device wakes ~twice a second for smooth motion. Restored after the
-// animation settles (or on exit) to save battery.
-#define GARAGE_ADV_INTERVAL  8
+// Advertising intervals (in 0.625 ms units) used while garage mode is active:
+//  - fast: during animation, so the device wakes ~2x/sec for smooth motion
+//  - settled: after the animation settles, so the ESP32 finds it faster on the
+//    next command (small battery cost while garage mode is on, ~9 months).
+// The saved interval is restored on exit (0xFF) or reboot.
+#define GARAGE_ADV_FAST     8   // 8 * 62.5 = 0.5 s
+#define GARAGE_ADV_SETTLED 16   // 16 * 62.5 = 1.0 s
 // Idle-state marquee word lengths (frames until settling to static text).
 #define GARAGE_CLOSED_WLEN   6
 #define GARAGE_OPEN_WLEN     4
@@ -126,29 +129,38 @@ static void sweep_top(bool opening, u32 frame) {
 	set_top(seg, seg, seg);
 }
 
-// ---- fast advertising helpers ----
-// While animating we advertise ~0.5s so the device wakes often enough for
-// smooth motion; restore the normal interval when settled or on exit.
-static void adv_fast_on(void) {
-	if (g_fast_adv) return;
-	g_saved_adv = cfg.advertising_interval;
-	cfg.advertising_interval = GARAGE_ADV_INTERVAL;
+// ---- advertising helpers ----
+// While garage mode is active we use a faster advertising interval so the
+// ESP32 discovers the thermometer quickly: FAST (0.5s) during animation and
+// SETTLED (1s) once the display settles. The saved interval is restored on
+// exit (0xFF) or reboot.
+static void adv_set(u8 interval) {
+	if (cfg.advertising_interval == interval) return;
+	cfg.advertising_interval = interval;
 	test_config();
 	ev_adv_timeout(0, 0, 0);
-	g_fast_adv = 1;
 }
-static void adv_fast_off(void) {
-	if (!g_fast_adv) return;
-	cfg.advertising_interval = g_saved_adv;
-	test_config();
-	ev_adv_timeout(0, 0, 0);
-	g_fast_adv = 0;
+static void adv_fast_on(void) { // start of an animation
+	if (g_adv_mode == 1) return;
+	if (g_adv_mode == 0) g_saved_adv = cfg.advertising_interval;
+	adv_set(GARAGE_ADV_FAST);
+	g_adv_mode = 1;
+}
+static void adv_settled(void) { // after the animation settles
+	if (g_adv_mode != 1) return;
+	adv_set(GARAGE_ADV_SETTLED);
+	g_adv_mode = 2;
+}
+static void adv_restore(void) { // exit garage mode
+	if (g_adv_mode == 0) return;
+	adv_set(g_saved_adv);
+	g_adv_mode = 0;
 }
 
 // ---- public API ----
 void garage_set_state(u8 state) {
 	if (state == GARAGE_STATE_OFF) {
-		adv_fast_off();
+		adv_restore();
 		g_active = 0;
 		g_settled = 0;
 		g_frame = 0;
@@ -184,7 +196,7 @@ void garage_task(u32 now) {
 		u32 wlen = (g_state == GARAGE_STATE_CLOSED) ? GARAGE_CLOSED_WLEN : GARAGE_OPEN_WLEN;
 		if (g_frame >= wlen + 2) {
 			g_settled = 1;
-			adv_fast_off();
+			adv_settled();
 			lcd_flg.update = 1;
 		}
 	}
