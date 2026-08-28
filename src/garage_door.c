@@ -4,6 +4,7 @@
 #include "lcd.h"
 #include "ble.h"
 #include "drivers.h"
+#include "flash_eep.h"
 #include "garage_door.h"
 
 #if (DEV_SERVICES & SERVICE_SCREEN) && (DEVICE_TYPE == DEVICE_LYWSD03MMC)
@@ -31,6 +32,7 @@ RAM static u32 g_last_tick = 0;
 RAM static u8  g_settled = 0;   // 1 = idle state settled to static text
 RAM static u8  g_saved_adv = 0; // advertising interval saved when garage mode started
 RAM static u8  g_adv_mode = 0;  // 0 = saved (normal), 1 = fast (animating), 2 = settled (1s)
+RAM static garage_eep_t g_eep_last; // last state written to EEP (avoids redundant writes)
 
 // Advertising intervals (in 0.625 ms units) used while garage mode is active:
 //  - fast: during animation, so the device wakes ~2x/sec for smooth motion
@@ -157,6 +159,41 @@ static void adv_restore(void) { // exit garage mode
 	g_adv_mode = 0;
 }
 
+// ---- EEP persistence ----
+// Save (active, state) to flash so the garage display survives a reboot.
+static void garage_eep_save(void) {
+	garage_eep_t eep;
+	eep.magic = GARAGE_EEP_MAGIC;
+	eep.active = g_active;
+	eep.state = g_state;
+	if (memcmp(&eep, &g_eep_last, sizeof(eep)) == 0) // no change -> no flash write
+		return;
+	flash_write_cfg(&eep, EEP_ID_GARAGE, sizeof(eep));
+	g_eep_last = eep;
+}
+
+// Restore the garage display from flash after a reboot (cold boot only).
+void garage_init(void) {
+	garage_eep_t eep;
+	if (flash_read_cfg(&eep, EEP_ID_GARAGE, sizeof(eep)) != sizeof(eep))
+		return;
+	if (eep.magic != GARAGE_EEP_MAGIC || !eep.active)
+		return;
+	g_eep_last = eep;
+	g_state = (eep.state <= GARAGE_STATE_ERROR) ? eep.state : GARAGE_STATE_CLOSED;
+	g_active = 1;
+	g_settled = (g_state == GARAGE_STATE_CLOSED || g_state == GARAGE_STATE_OPEN);
+	g_frame = 0;
+	g_last_tick = clock_time();
+	if (g_settled) {
+		adv_fast_on();
+		adv_settled(); // -> 1s settled advertising
+	} else {
+		adv_fast_on(); // keep animating transitions/error
+	}
+	lcd_flg.update = 1;
+}
+
 // ---- public API ----
 void garage_set_state(u8 state) {
 	if (state == GARAGE_STATE_OFF) {
@@ -165,6 +202,7 @@ void garage_set_state(u8 state) {
 		g_settled = 0;
 		g_frame = 0;
 		lcd_flg.update = 1;
+		garage_eep_save();
 	} else if (state <= GARAGE_STATE_ERROR) {
 		g_state = state;
 		g_active = 1;
@@ -173,6 +211,7 @@ void garage_set_state(u8 state) {
 		g_last_tick = clock_time();
 		adv_fast_on();
 		lcd_flg.update = 1;
+		garage_eep_save();
 	}
 }
 
@@ -247,6 +286,7 @@ void garage_render(void) {
 #else // (DEV_SERVICES & SERVICE_SCREEN) && (DEVICE_TYPE == DEVICE_LYWSD03MMC)
 
 // No-op stubs for other device builds so symbols always exist.
+void garage_init(void) { }
 void garage_set_state(u8 state) { (void)state; }
 void garage_set_period(u8 period_x100ms) { (void)period_x100ms; }
 u8 garage_is_active(void) { return 0; }

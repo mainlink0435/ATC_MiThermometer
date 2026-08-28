@@ -986,6 +986,9 @@ void user_init_normal(void) {//this will get executed one time after power up
 	task_my18b20();
 #endif
 
+	// Restore the garage-door display after a reboot (survives power loss).
+	garage_init();
+
 	bls_pm_setManualLatency(0);
 }
 

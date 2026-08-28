@@ -31,6 +31,18 @@ enum {
 
 #define GARAGE_DEFAULT_PERIOD_X100MS	5	// 0.5s
 
+// Persisted garage-door state (stored in flash EEP so it survives reboots).
+typedef struct __attribute__((packed)) _garage_eep_t {
+	u8 magic;   // validity marker
+	u8 active;  // 1 = garage display mode was active
+	u8 state;   // garage state (0..4)
+} garage_eep_t;
+
+#define GARAGE_EEP_MAGIC	0x5A
+
+// Restore the garage display from flash at boot (if it was active before a reboot).
+void garage_init(void);
+
 // Set the garage door state (0..4) and activate the display mode.
 // Pass GARAGE_STATE_OFF (0xFF) to deactivate and return to normal display.
 void garage_set_state(u8 state);
