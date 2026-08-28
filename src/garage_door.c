@@ -30,7 +30,6 @@ RAM static volatile u8  g_period_x100ms = GARAGE_DEFAULT_PERIOD_X100MS;
 RAM static u32 g_frame = 0;
 RAM static u32 g_last_tick = 0;
 RAM static u8  g_settled = 0;   // 1 = idle state settled to static text
-RAM static u8  g_saved_adv = 0; // advertising interval saved when garage mode started
 RAM static u8  g_adv_mode = 0;  // 0 = saved (normal), 1 = fast (animating), 2 = settled (1s)
 RAM static garage_eep_t g_eep_last; // last state written to EEP (avoids redundant writes)
 
@@ -132,19 +131,20 @@ static void sweep_top(bool opening, u32 frame) {
 }
 
 // ---- advertising helpers ----
-// While garage mode is active we use a faster advertising interval so the
-// ESP32 discovers the thermometer quickly: FAST (0.5s) during animation and
-// SETTLED (1s) once the display settles. The saved interval is restored on
-// exit (0xFF) or reboot.
+// While garage mode is active we advertise faster so the ESP32 discovers the
+// thermometer quickly: FAST (0.5s) during animation and SETTLED (1s) once the
+// display settles. We override only the live interval (wrk.adv_interval) and
+// never touch the stored cfg.advertising_interval, so the connection interval
+// (which the firmware derives from cfg.advertising_interval when connect
+// latency is 0) and the saved config are unaffected.
 static void adv_set(u8 interval) {
-	if (cfg.advertising_interval == interval) return;
-	cfg.advertising_interval = interval;
-	test_config();
+	u32 adv = (u32)interval * 100; // same 0.625ms scale as wrk.adv_interval
+	if (wrk.adv_interval == adv) return;
+	wrk.adv_interval = adv;
 	ev_adv_timeout(0, 0, 0);
 }
 static void adv_fast_on(void) { // start of an animation
 	if (g_adv_mode == 1) return;
-	if (g_adv_mode == 0) g_saved_adv = cfg.advertising_interval;
 	adv_set(GARAGE_ADV_FAST);
 	g_adv_mode = 1;
 }
@@ -155,7 +155,8 @@ static void adv_settled(void) { // after the animation settles
 }
 static void adv_restore(void) { // exit garage mode
 	if (g_adv_mode == 0) return;
-	adv_set(g_saved_adv);
+	wrk.adv_interval = cfg.advertising_interval * 100; // back to the real stored value
+	ev_adv_timeout(0, 0, 0);
 	g_adv_mode = 0;
 }
 
